@@ -33,8 +33,8 @@ function run(ctx) {
   console.log('Project name has changed. Renaming .entitlements file.');
 
   // if it does - rename it
-  var oldEntitlementsFilePath = path.join(iosProjectFilePath, oldProjectName, 'Resources', oldProjectName + '.entitlements');
-  var newEntitlementsFilePath = path.join(iosProjectFilePath, oldProjectName, 'Resources', newProjectName + '.entitlements');
+  var oldEntitlementsFilePath = path.join(iosProjectFilePath, oldProjectName, oldProjectName + '.entitlements');
+  var newEntitlementsFilePath = path.join(iosProjectFilePath, oldProjectName, newProjectName + '.entitlements');
 
   try {
     fs.renameSync(oldEntitlementsFilePath, newEntitlementsFilePath);
