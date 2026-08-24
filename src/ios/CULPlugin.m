@@ -11,6 +11,8 @@
 #import "CDVPluginResult+CULPlugin.h"
 #import "CDVInvokedUrlCommand+CULPlugin.h"
 #import "CULConfigJsonParser.h"
+#import "CULLaunchBuffer.h"
+#import <Cordova/CDVPluginNotifications.h>
 
 @interface CULPlugin() {
     NSArray *_supportedHosts;
@@ -26,6 +28,24 @@
 
 - (void)pluginInitialize {
     [self localInit];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleContinueUserActivity:)
+                                                 name:CDVPluginContinueUserActivityNotification
+                                               object:nil];
+
+    // A link that started the app was delivered to the scene delegate before this
+    // plugin existed, so it is waiting for us instead of having been notified.
+    NSUserActivity *launchUserActivity = [CULLaunchBuffer takePendingUserActivity];
+    if (launchUserActivity) {
+        [self handleUserActivity:launchUserActivity];
+    }
+
+    NSURL *launchURL = [CULLaunchBuffer takePendingURL];
+    if (launchURL) {
+        [self handleLaunchURL:launchURL];
+    }
+
     // Can be used for testing.
     // Just uncomment, close the app and reopen it. That will simulate application launch from the link.
 //    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onResume:) name:UIApplicationWillEnterForegroundNotification object:nil];
@@ -43,16 +63,34 @@
     if (![url isKindOfClass:[NSURL class]]) {
         return;
     }
-    
-    CULHost *host = [self findHostByURL:url];
-    if (host) {
-        [self storeEventWithHost:host originalURL:url];
+
+    // we are being notified after all, so nothing is left to pick up
+    [CULLaunchBuffer takePendingURL];
+
+    [self handleLaunchURL:url];
+}
+
+- (void)handleContinueUserActivity:(NSNotification *)notification {
+    id userActivity = notification.object;
+    if (![userActivity isKindOfClass:[NSUserActivity class]]) {
+        return;
     }
+
+    // we are being notified after all, so nothing is left to pick up
+    [CULLaunchBuffer takePendingUserActivity];
+
+    [self handleUserActivity:userActivity];
 }
 
 - (BOOL)handleUserActivity:(NSUserActivity *)userActivity {
+    // Cordova forwards every continued activity, not just the ones that came from a
+    // link: handoff, Siri intents and state restoration all arrive here as well.
+    if (![userActivity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb] || userActivity.webpageURL == nil) {
+        return NO;
+    }
+
     [self localInit];
-    
+
     NSURL *launchURL = userActivity.webpageURL;
     CULHost *host = [self findHostByURL:launchURL];
     if (host == nil) {
@@ -73,6 +111,20 @@
 }
 
 #pragma mark Private API
+
+/**
+ *  Handle url that opened the app through a custom scheme.
+ *
+ *  @param url launch url
+ */
+- (void)handleLaunchURL:(NSURL *)url {
+    [self localInit];
+
+    CULHost *host = [self findHostByURL:url];
+    if (host) {
+        [self storeEventWithHost:host originalURL:url];
+    }
+}
 
 - (void)localInit {
     if (_supportedHosts) {

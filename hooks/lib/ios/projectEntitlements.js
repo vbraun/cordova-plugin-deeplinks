@@ -1,19 +1,25 @@
 /*
-Script creates entitlements file with the list of hosts, specified in config.xml.
-File name is: ProjectName.entitlements
-Location: ProjectName/
+Script injects the list of hosts, specified in config.xml, into the entitlements files
+that cordova-ios generates for the application:
 
-Script only generates content. File it self is included in the xcode project in another hook: xcodePreferences.js.
+  platforms/ios/App/Entitlements-Debug.plist
+  platforms/ios/App/Entitlements-Release.plist
+
+Those are the files the Xcode project already points CODE_SIGN_ENTITLEMENTS at, so
+nothing has to be changed about how the application is signed.
 */
 
 var path = require('path');
 var fs = require('fs');
 var plist = require('plist');
-var mkpath = require('mkpath');
 var cordova_ios = require('cordova-ios');
 var ASSOCIATED_DOMAINS = 'com.apple.developer.associated-domains';
+
+// cordova-ios sets CODE_SIGN_ENTITLEMENTS to "$(TARGET_NAME)/Entitlements-$(CONFIGURATION).plist"
+var BUILD_CONFIGURATIONS = ['Debug', 'Release'];
+
 var context;
-var entitlementsFilePath;
+var entitlementsFilePaths;
 
 module.exports = {
   generateAssociatedDomainsEntitlements: generateEntitlements
@@ -22,7 +28,7 @@ module.exports = {
 // region Public API
 
 /**
- * Generate entitlements file content.
+ * Inject associated domains into the entitlements files of the project.
  *
  * @param {Object} cordovaContext - cordova context object
  * @param {Object} pluginPreferences - plugin preferences from config.xml; already parsed
@@ -30,10 +36,12 @@ module.exports = {
 function generateEntitlements(cordovaContext, pluginPreferences) {
   context = cordovaContext;
 
-  var currentEntitlements = getEntitlementsFileContent();
-  var newEntitlements = injectPreferences(currentEntitlements, pluginPreferences);
+  pathsToEntitlementsFiles().forEach(function(filePath) {
+    var currentEntitlements = getEntitlementsFileContent(filePath);
+    var newEntitlements = injectPreferences(currentEntitlements, pluginPreferences);
 
-  saveContentToEntitlementsFile(newEntitlements);
+    saveContentToEntitlementsFile(filePath, newEntitlements);
+  });
 }
 
 // endregion
@@ -43,30 +51,24 @@ function generateEntitlements(cordovaContext, pluginPreferences) {
 /**
  * Save data to entitlements file.
  *
+ * @param {String} filePath - absolute path to the entitlements file
  * @param {Object} content - data to save; JSON object that will be transformed into xml
  */
-function saveContentToEntitlementsFile(content) {
-  var plistContent = plist.build(content);
-  var filePath = pathToEntitlementsFile();
-
-  // ensure that file exists
-  mkpath.sync(path.dirname(filePath));
-
-  // save it's content
-  fs.writeFileSync(filePath, plistContent, 'utf8');
+function saveContentToEntitlementsFile(filePath, content) {
+  fs.writeFileSync(filePath, plist.build(content), 'utf8');
 }
 
 /**
  * Read data from existing entitlements file. If none exist - default value is returned
  *
- * @return {String} entitlements file content
+ * @param {String} filePath - absolute path to the entitlements file
+ * @return {Object} entitlements file content
  */
-function getEntitlementsFileContent() {
-  var pathToFile = pathToEntitlementsFile();
+function getEntitlementsFileContent(filePath) {
   var content;
 
   try {
-    content = fs.readFileSync(pathToFile, 'utf8');
+    content = fs.readFileSync(filePath, 'utf8');
   } catch (err) {
     return defaultEntitlementsFile();
   }
@@ -134,19 +136,21 @@ function domainsListEntryForHost(host) {
 // region Path helper methods
 
 /**
- * Path to entitlements file.
+ * Paths to the entitlements files of the project - one per build configuration.
  *
- * @return {String} absolute path to entitlements file
+ * @return {String[]} absolute paths to the entitlements files
  */
-function pathToEntitlementsFile() {
-  if (entitlementsFilePath === undefined) {
+function pathsToEntitlementsFiles() {
+  if (entitlementsFilePaths === undefined) {
     var platformPath = path.join(getProjectRoot(), 'platforms', 'ios');
     var iosProject = new cordova_ios('ios', platformPath);
-    var iosProjName = path.basename(iosProject.locations.xcodeCordovaProj);
-    entitlementsFilePath = path.join(getProjectRoot(), 'platforms', 'ios', iosProjName, 'Resources', iosProjName + '.entitlements');
+
+    entitlementsFilePaths = BUILD_CONFIGURATIONS.map(function(configuration) {
+      return path.join(iosProject.locations.xcodeCordovaProj, 'Entitlements-' + configuration + '.plist');
+    });
   }
 
-  return entitlementsFilePath;
+  return entitlementsFilePaths;
 }
 
 /**

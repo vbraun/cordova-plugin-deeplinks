@@ -1,15 +1,23 @@
 /*
 Script activates support for Universal Links in the application by setting proper preferences in the xcode project file.
 Which is:
-- deployment target set to iOS 9.0
-- .entitlements file added to project PBXGroup and PBXFileReferences section
-- path to .entitlements file added to Code Sign Entitlements preference
+- deployment target set to the minimum that cordova-ios supports
+- code signing left pointing at the entitlements files that cordova-ios generates
+
+Content of those entitlements files is generated in another hook: projectEntitlements.js.
 */
 
 var path = require('path');
 var compare = require('node-version-compare');
 var cordova_ios = require('cordova-ios');
 var IOS_DEPLOYMENT_TARGET = '13.0';
+
+// what cordova-ios puts in the project template
+var DEFAULT_CODE_SIGN_ENTITLEMENTS = '"$(TARGET_NAME)/Entitlements-$(CONFIGURATION).plist"';
+
+// what versions of this plugin up to 1.1.x used to put there instead
+var LEGACY_CODE_SIGN_ENTITLEMENTS = /Resources[\/\\][^"]*\.entitlements/;
+
 var COMMENT_KEY = /_comment$/;
 var context;
 
@@ -32,9 +40,6 @@ function enableAssociativeDomainsCapability(cordovaContext) {
   // adjust preferences
   activateAssociativeDomains(projectFile.xcode);
 
-  // add entitlements file to pbxfilereference
-  addPbxReference(projectFile.xcode);
-
   // save changes
   projectFile.write();
 }
@@ -45,21 +50,20 @@ function enableAssociativeDomainsCapability(cordovaContext) {
 
 /**
  * Activate associated domains support in the xcode project file:
- * - set deployment target to ios 9;
- * - add .entitlements file to Code Sign Entitlements preference.
+ * - bump the deployment target if the project is below what cordova-ios needs;
+ * - undo the Code Sign Entitlements override of older versions of this plugin.
  *
  * @param {Object} xcodeProject - xcode project preferences; all changes are made in that instance
  */
 function activateAssociativeDomains(xcodeProject) {
   var configurations = nonComments(xcodeProject.pbxXCBuildConfigurationSection());
-  var entitlementsFilePath = pathToEntitlementsFile();
   var config;
   var buildSettings;
   var deploymentTargetIsUpdated;
+  var entitlementsAreRestored;
 
   for (config in configurations) {
     buildSettings = configurations[config].buildSettings;
-    buildSettings['CODE_SIGN_ENTITLEMENTS'] = '"' + entitlementsFilePath + '"';
 
     // if deployment target is less then the required one - increase it
     if (buildSettings['IPHONEOS_DEPLOYMENT_TARGET']) {
@@ -71,59 +75,26 @@ function activateAssociativeDomains(xcodeProject) {
       buildSettings['IPHONEOS_DEPLOYMENT_TARGET'] = IOS_DEPLOYMENT_TARGET;
       deploymentTargetIsUpdated = true;
     }
+
+    // Projects prepared by an older version of this plugin sign against a
+    // <ProjectName>.entitlements of our own making, which shadows the per-configuration
+    // files that cordova-ios and every other plugin write to. Hand signing back.
+    if (LEGACY_CODE_SIGN_ENTITLEMENTS.test(buildSettings['CODE_SIGN_ENTITLEMENTS'] || '')) {
+      buildSettings['CODE_SIGN_ENTITLEMENTS'] = DEFAULT_CODE_SIGN_ENTITLEMENTS;
+      entitlementsAreRestored = true;
+    }
   }
 
   if (deploymentTargetIsUpdated) {
     console.log('IOS project now has deployment target set as: ' + IOS_DEPLOYMENT_TARGET);
   }
 
-  console.log('IOS project Code Sign Entitlements now set to: ' + entitlementsFilePath);
+  if (entitlementsAreRestored) {
+    console.log('IOS project Code Sign Entitlements restored to: ' + DEFAULT_CODE_SIGN_ENTITLEMENTS);
+  }
 }
 
 // endregion
-
-// region PBXReference methods
-
-/**
- * Add .entitlemets file into the project.
- *
- * @param {Object} xcodeProject - xcode project preferences; all changes are made in that instance
- */
-function addPbxReference(xcodeProject) {
-  var fileReferenceSection = nonComments(xcodeProject.pbxFileReferenceSection());
-  var entitlementsFileName = path.basename(pathToEntitlementsFile());
-
-  if (isPbxReferenceAlreadySet(fileReferenceSection, entitlementsFileName)) {
-    console.log('Entitlements file is in reference section.');
-    return;
-  }
-
-  console.log('Entitlements file is not in references section, adding it');
-  xcodeProject.addResourceFile(entitlementsFileName);
-}
-
-/**
- * Check if .entitlemets file reference already set.
- *
- * @param {Object} fileReferenceSection - PBXFileReference section
- * @param {String} entitlementsRelativeFilePath - relative path to entitlements file
- * @return true - if reference is set; otherwise - false
- */
-function isPbxReferenceAlreadySet(fileReferenceSection, entitlementsRelativeFilePath) {
-  var isAlreadyInReferencesSection = false;
-  var uuid;
-  var fileRefEntry;
-
-  for (uuid in fileReferenceSection) {
-    fileRefEntry = fileReferenceSection[uuid];
-    if (fileRefEntry.path && fileRefEntry.path.indexOf(entitlementsRelativeFilePath) > -1) {
-      isAlreadyInReferencesSection = true;
-      break;
-    }
-  }
-
-  return isAlreadyInReferencesSection;
-}
 
 // region Xcode project file helpers
 
@@ -178,15 +149,6 @@ function iosPlatformPath() {
 
 function projectRoot() {
   return context.opts.projectRoot;
-}
-
-function pathToEntitlementsFile() {
-  var platformPath = iosPlatformPath();
-  var iosProject = new cordova_ios('ios', platformPath);
-  var projectName = path.basename(iosProject.locations.xcodeCordovaProj);
-  var fileName = projectName + '.entitlements';
-
-  return path.join(projectName, 'Resources', fileName);
 }
 
 // endregion
